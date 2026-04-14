@@ -1,0 +1,176 @@
+{
+  "info": {
+    "name": "Vault B Local API",
+    "_postman_id": "51022a06-31e0-448c-ae5f-ee302a59c0ca",
+    "description": "HTTPie Desktop-importable collection for the local vault-b cluster.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:32081"
+    },
+    {
+      "key": "vault_token",
+      "value": "hvs.McBM2R7LVtLxFfTsbQxOo7Ef"
+    }
+  ],
+  "item": [
+    {
+      "name": "System",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/v1/sys/health?standbyok=true&perfstandbyok=true"
+          }
+        },
+        {
+          "name": "Seal Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/v1/sys/seal-status"
+          }
+        },
+        {
+          "name": "List Mounts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Vault-Token",
+                "value": "{{vault_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/sys/mounts"
+          }
+        },
+        {
+          "name": "List Auth Methods",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Vault-Token",
+                "value": "{{vault_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/sys/auth"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Lookup Self",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Vault-Token",
+                "value": "{{vault_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/auth/token/lookup-self"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Raft",
+      "item": [
+        {
+          "name": "List Peers",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Vault-Token",
+                "value": "{{vault_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/sys/storage/raft/configuration"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Secrets Demo",
+      "item": [
+        {
+          "name": "Enable KV v2 secret-demo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Vault-Token",
+                "value": "{{vault_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"kv\",\n  \"options\": {\n    \"version\": \"2\"\n  }\n}"
+            },
+            "url": "{{base_url}}/v1/sys/mounts/secret-demo"
+          }
+        },
+        {
+          "name": "Write Demo Secret",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Vault-Token",
+                "value": "{{vault_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"data\": {\n    \"message\": \"hello from HTTPie Desktop\",\n    \"cluster\": \"vault-b\"\n  }\n}"
+            },
+            "url": "{{base_url}}/v1/secret-demo/data/demo"
+          }
+        },
+        {
+          "name": "Read Demo Secret",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Vault-Token",
+                "value": "{{vault_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/secret-demo/data/demo"
+          }
+        },
+        {
+          "name": "Delete Demo Secret",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-Vault-Token",
+                "value": "{{vault_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/secret-demo/data/demo"
+          }
+        }
+      ]
+    }
+  ]
+}

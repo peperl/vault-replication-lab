@@ -1,0 +1,15 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: vault-lab
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 32080
+        hostPort: 32080
+        protocol: TCP
+      - containerPort: 32081
+        hostPort: 32081
+        protocol: TCP
+  - role: worker
+  - role: worker
+  - role: worker

@@ -1,5 +1,5 @@
 global:
-  tlsDisable: true
+  tlsDisable: false
 
 injector:
   enabled: false
@@ -10,6 +10,16 @@ csi:
 server:
   image:
     tag: "1.21.2"
+  extraEnvironmentVars:
+    VAULT_CACERT: /vault/userconfig/tls/ca.crt
+  volumes:
+    - name: tls
+      secret:
+        secretName: vault-b-tls
+  volumeMounts:
+    - name: tls
+      mountPath: /vault/userconfig/tls
+      readOnly: true
   resources:
     requests:
       cpu: 250m
@@ -36,7 +46,10 @@ server:
         disable_mlock = true
 
         listener "tcp" {
-          tls_disable = 1
+          tls_disable = 0
+          tls_cert_file = "/vault/userconfig/tls/tls.crt"
+          tls_key_file = "/vault/userconfig/tls/tls.key"
+          tls_client_ca_file = "/vault/userconfig/tls/ca.crt"
           address = "[::]:8200"
           cluster_address = "[::]:8201"
         }

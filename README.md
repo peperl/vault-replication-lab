@@ -6,6 +6,7 @@ Pinned versions:
 
 - Vault Helm chart: `0.32.0`
 - Vault server image: `1.21.2`
+- cert-manager static install: `v1.20.0`
 
 The `kind` cluster created here uses:
 
@@ -15,8 +16,8 @@ The `kind` cluster created here uses:
 
 Vault clusters:
 
-- `vault-a` namespace, UI/API on `http://127.0.0.1:32080`
-- `vault-b` namespace, UI/API on `http://127.0.0.1:32081`
+- `vault-a` namespace, UI/API on `https://127.0.0.1:32080`
+- `vault-b` namespace, UI/API on `https://127.0.0.1:32081`
 
 Both Vault clusters use:
 
@@ -24,6 +25,7 @@ Both Vault clusters use:
 - Integrated Raft storage
 - `3` server replicas each
 - Default Helm anti-affinity enabled so pods spread across kind nodes
+- cert-manager-issued TLS certificates signed by a local self-signed CA
 - Disabled injector and CSI components to keep the local footprint smaller
 
 ## Create the kind cluster
@@ -49,6 +51,21 @@ VERBOSE=1 ./scripts/bootstrap.sh
 VERBOSE=1 ./scripts/uninstall.sh
 ```
 
+## TLS assets
+
+`install.sh` deploys cert-manager, creates a local CA `ClusterIssuer`, issues per-cluster certificates, and exports the CA certificate to:
+
+```bash
+secrets/vault-lab-ca.crt
+```
+
+Use that CA file with local clients, for example:
+
+```bash
+curl --cacert secrets/vault-lab-ca.crt https://127.0.0.1:32080/v1/sys/health
+curl --cacert secrets/vault-lab-ca.crt https://127.0.0.1:32081/v1/sys/health
+```
+
 ## Check status
 
 ```bash
@@ -57,65 +74,32 @@ kubectl get pods -n vault-a -o wide
 kubectl get pods -n vault-b -o wide
 kubectl get svc -n vault-a
 kubectl get svc -n vault-b
+kubectl get certificate -n vault-a
+kubectl get certificate -n vault-b
 ```
 
-## Initialize, join, and unseal
+## Bootstrap details
 
-Initialize only the first pod in each cluster:
+`bootstrap.sh` now performs Vault operations over HTTPS from inside each pod, using the mounted cert-manager CA bundle. The flow is:
+
+1. Initialize `vault-*-0` with `key-shares=1` and `key-threshold=1`.
+2. Unseal `vault-*-0`.
+3. Join `vault-*-1` and `vault-*-2` to the leader over `https://vault-*-0.<release>-internal:8200`, passing the mounted CA, client certificate, and client key to `vault operator raft join`.
+4. Unseal the follower pods.
+
+The init outputs are stored in:
 
 ```bash
-kubectl exec -n vault-a vault-a-0 -- vault operator init
-kubectl exec -n vault-b vault-b-0 -- vault operator init
+secrets/vault-a-init.json
+secrets/vault-b-init.json
 ```
-
-Save the unseal keys and initial root token somewhere secure.
-
-Unseal the first pod in each cluster with enough keys to satisfy the threshold returned by `vault operator init`:
-
-```bash
-kubectl exec -n vault-a vault-a-0 -- vault operator unseal
-kubectl exec -n vault-a vault-a-0 -- vault operator unseal
-kubectl exec -n vault-a vault-a-0 -- vault operator unseal
-
-kubectl exec -n vault-b vault-b-0 -- vault operator unseal
-kubectl exec -n vault-b vault-b-0 -- vault operator unseal
-kubectl exec -n vault-b vault-b-0 -- vault operator unseal
-```
-
-Join the remaining pods to the Raft leader:
-
-```bash
-kubectl exec -n vault-a vault-a-1 -- vault operator raft join http://vault-a-0.vault-a-internal:8200
-kubectl exec -n vault-a vault-a-2 -- vault operator raft join http://vault-a-0.vault-a-internal:8200
-
-kubectl exec -n vault-b vault-b-1 -- vault operator raft join http://vault-b-0.vault-b-internal:8200
-kubectl exec -n vault-b vault-b-2 -- vault operator raft join http://vault-b-0.vault-b-internal:8200
-```
-
-Then unseal the joined follower pods:
-
-```bash
-kubectl exec -n vault-a vault-a-1 -- vault operator unseal
-kubectl exec -n vault-a vault-a-1 -- vault operator unseal
-kubectl exec -n vault-a vault-a-1 -- vault operator unseal
-kubectl exec -n vault-a vault-a-2 -- vault operator unseal
-kubectl exec -n vault-a vault-a-2 -- vault operator unseal
-kubectl exec -n vault-a vault-a-2 -- vault operator unseal
-
-kubectl exec -n vault-b vault-b-1 -- vault operator unseal
-kubectl exec -n vault-b vault-b-1 -- vault operator unseal
-kubectl exec -n vault-b vault-b-1 -- vault operator unseal
-kubectl exec -n vault-b vault-b-2 -- vault operator unseal
-kubectl exec -n vault-b vault-b-2 -- vault operator unseal
-kubectl exec -n vault-b vault-b-2 -- vault operator unseal
-```
-
-At the end, each cluster should have one active leader and two standby followers.
 
 ## Access the UIs
 
-- Cluster A: `http://127.0.0.1:32080`
-- Cluster B: `http://127.0.0.1:32081`
+- Cluster A: `https://127.0.0.1:32080`
+- Cluster B: `https://127.0.0.1:32081`
+
+Because the certs are signed by the local CA created for this lab, your browser or API client must trust `secrets/vault-lab-ca.crt`.
 
 ## Remove everything
 
@@ -127,6 +111,6 @@ At the end, each cluster should have one active leader and two standby followers
 ## Notes
 
 - This setup assumes a real multi-node `kind` cluster so the Vault chart can keep its HA anti-affinity.
-- TLS is disabled for local development convenience.
+- The CA is self-signed for local development only.
 - Each cluster gets its own PVC-backed Raft data store.
 - If your kind cluster does not have a default `StorageClass`, the Vault PVCs will remain pending until one is installed.

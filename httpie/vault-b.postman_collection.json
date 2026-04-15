@@ -8,7 +8,7 @@
   "variable": [
     {
       "key": "base_url",
-      "value": "http://127.0.0.1:32081"
+      "value": "https://127.0.0.1:32081"
     },
     {
       "key": "vault_token",

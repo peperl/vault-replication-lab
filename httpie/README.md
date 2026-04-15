@@ -23,3 +23,9 @@ Security note:
 - These files contain active root tokens.
 - Treat them like secrets.
 - If you share this workspace, rotate the tokens or reinitialize the clusters.
+
+
+TLS note:
+
+- The collections now use `https://127.0.0.1:32080` and `https://127.0.0.1:32081`.
+- Trust `../secrets/vault-lab-ca.crt` in your OS or HTTPie Desktop before using them.

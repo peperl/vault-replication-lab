@@ -1,0 +1,79 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vault-a-tls
+  namespace: vault-a
+spec:
+  secretName: vault-a-tls
+  commonName: vault-a.vault-a.svc
+  issuerRef:
+    name: vault-lab-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  dnsNames:
+    - localhost
+    - vault-a
+    - vault-a.vault-a
+    - vault-a.vault-a.svc
+    - vault-a.vault-a.svc.cluster.local
+    - vault-a-active
+    - vault-a-active.vault-a
+    - vault-a-active.vault-a.svc
+    - vault-a-active.vault-a.svc.cluster.local
+    - vault-a-standby
+    - vault-a-standby.vault-a
+    - vault-a-standby.vault-a.svc
+    - vault-a-standby.vault-a.svc.cluster.local
+    - vault-a-ui
+    - vault-a-ui.vault-a
+    - vault-a-ui.vault-a.svc
+    - vault-a-ui.vault-a.svc.cluster.local
+    - '*.vault-a-internal'
+    - '*.vault-a-internal.vault-a'
+    - '*.vault-a-internal.vault-a.svc'
+    - '*.vault-a-internal.vault-a.svc.cluster.local'
+  ipAddresses:
+    - 127.0.0.1
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vault-b-tls
+  namespace: vault-b
+spec:
+  secretName: vault-b-tls
+  commonName: vault-b.vault-b.svc
+  issuerRef:
+    name: vault-lab-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  dnsNames:
+    - localhost
+    - vault-b
+    - vault-b.vault-b
+    - vault-b.vault-b.svc
+    - vault-b.vault-b.svc.cluster.local
+    - vault-b-active
+    - vault-b-active.vault-b
+    - vault-b-active.vault-b.svc
+    - vault-b-active.vault-b.svc.cluster.local
+    - vault-b-standby
+    - vault-b-standby.vault-b
+    - vault-b-standby.vault-b.svc
+    - vault-b-standby.vault-b.svc.cluster.local
+    - vault-b-ui
+    - vault-b-ui.vault-b
+    - vault-b-ui.vault-b.svc
+    - vault-b-ui.vault-b.svc.cluster.local
+    - '*.vault-b-internal'
+    - '*.vault-b-internal.vault-b'
+    - '*.vault-b-internal.vault-b.svc'
+    - '*.vault-b-internal.vault-b.svc.cluster.local'
+  ipAddresses:
+    - 127.0.0.1

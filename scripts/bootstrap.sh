@@ -16,12 +16,31 @@ fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KIND_CONTEXT="kind-vault-lab"
 SECRETS_DIR="${ROOT_DIR}/secrets"
+VAULT_CACERT_PATH="/vault/userconfig/tls/ca.crt"
+VAULT_CLIENT_CERT_PATH="/vault/userconfig/tls/tls.crt"
+VAULT_CLIENT_KEY_PATH="/vault/userconfig/tls/tls.key"
+LOCAL_VAULT_ADDR="https://127.0.0.1:8200"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+vault_cli() {
+  local namespace="$1"
+  local pod="$2"
+  shift 2
+  kubectl exec -n "${namespace}" "${pod}" -- env     VAULT_ADDR="${LOCAL_VAULT_ADDR}"     VAULT_CACERT="${VAULT_CACERT_PATH}"     "$@"
+}
+
+raft_join() {
+  local namespace="$1"
+  local pod="$2"
+  local join_addr="$3"
+
+  kubectl exec -n "${namespace}" "${pod}" -- env     VAULT_ADDR="${LOCAL_VAULT_ADDR}"     VAULT_CACERT_FILE="${VAULT_CACERT_PATH}"     VAULT_CLIENT_CERT_FILE="${VAULT_CLIENT_CERT_PATH}"     VAULT_CLIENT_KEY_FILE="${VAULT_CLIENT_KEY_PATH}"     JOIN_ADDR="${join_addr}"     sh -ec 'vault operator raft join       -address="$VAULT_ADDR"       -leader-ca-cert="$(cat "$VAULT_CACERT_FILE")"       -leader-client-cert="$(cat "$VAULT_CLIENT_CERT_FILE")"       -leader-client-key="$(cat "$VAULT_CLIENT_KEY_FILE")"       "$JOIN_ADDR"'
 }
 
 wait_for_pod() {
@@ -47,7 +66,7 @@ retry_unseal() {
 
     echo "Unseal attempt ${i}/${attempts} for ${namespace}/${pod}..."
     { set +x; } 2>/dev/null
-    if kubectl exec -n "${namespace}" "${pod}" -- vault operator unseal "${unseal_key}"; then
+    if vault_cli "${namespace}" "${pod}" vault operator unseal "${unseal_key}"; then
       set -x
       if [[ "$(vault_sealed "${namespace}" "${pod}")" == "false" ]]; then
         return 0
@@ -70,7 +89,7 @@ vault_field() {
   local fallback="$4"
   local output
 
-  output="$(kubectl exec -n "${namespace}" "${pod}" -- vault status -format=json 2>/dev/null || true)"
+  output="$(vault_cli "${namespace}" "${pod}" vault status -format=json 2>/dev/null || true)"
   if [[ -z "${output}" ]]; then
     echo "${fallback}"
     return 0
@@ -98,7 +117,7 @@ bootstrap_cluster() {
   local follower_1="${release}-1"
   local follower_2="${release}-2"
   local init_file="${SECRETS_DIR}/${release}-init.json"
-  local join_addr="http://${leader_pod}.${release}-internal:8200"
+  local join_addr="https://${leader_pod}.${release}-internal:8200"
 
   wait_for_pod "${namespace}" "${leader_pod}"
   wait_for_pod "${namespace}" "${follower_1}"
@@ -112,7 +131,7 @@ bootstrap_cluster() {
     fi
 
     echo "Initializing ${release} with key-shares=1 and key-threshold=1..."
-    kubectl exec -n "${namespace}" "${leader_pod}" --       vault operator init -format=json -key-shares=1 -key-threshold=1 > "${init_file}"
+    vault_cli "${namespace}" "${leader_pod}"       vault operator init -format=json -key-shares=1 -key-threshold=1 > "${init_file}"
     chmod 600 "${init_file}"
     initialized_now="true"
   else
@@ -138,7 +157,7 @@ bootstrap_cluster() {
   for pod in "${follower_1}" "${follower_2}"; do
     if [[ "$(vault_initialized "${namespace}" "${pod}")" != "true" ]]; then
       echo "Joining ${pod} to ${leader_pod}..."
-      kubectl exec -n "${namespace}" "${pod}" -- vault operator raft join "${join_addr}"
+      raft_join "${namespace}" "${pod}" "${join_addr}"
     fi
 
     if [[ "$(vault_sealed "${namespace}" "${pod}")" == "true" ]]; then
@@ -174,6 +193,6 @@ Init files:
   secrets/vault-b-init.json
 
 APIs:
-  http://127.0.0.1:32080
-  http://127.0.0.1:32081
+  https://127.0.0.1:32080
+  https://127.0.0.1:32081
 EOF

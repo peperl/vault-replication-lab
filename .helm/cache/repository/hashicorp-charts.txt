@@ -1,10 +1,10 @@
-vault-radar-agent
-waypoint
 consul
-vault-secrets-gateway
-vault-secrets-operator
-hcp-terraform-operator
 terraform
 terraform-cloud-operator
 terraform-enterprise
 vault
+vault-radar-agent
+vault-secrets-operator
+waypoint
+hcp-terraform-operator
+vault-secrets-gateway

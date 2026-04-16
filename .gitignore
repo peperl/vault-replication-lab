@@ -1,2 +1,2 @@
 secrets
-.helm
+.helmsecrets/vault-lab-ca.crt

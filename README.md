@@ -101,11 +101,38 @@ secrets/vault-b-init.json
 
 Because the certs are signed by the local CA created for this lab, your browser or API client must trust `secrets/vault-lab-ca.crt`.
 
+## External Secrets operator cluster
+
+This workspace now supports a separate operator cluster for External Secrets, which can connect to Vault A.
+
+1. Create the operator cluster:
+
+```bash
+./scripts/eso/create-kind-cluster-eso.sh
+```
+
+2. Bootstrap Vault A auth methods for Kubernetes and JWT:
+
+```bash
+kubectl config use-context kind-vault-lab
+./scripts/eso/bootstrap-vault-auth.sh
+```
+
+3. Install the External Secrets operator into the new cluster:
+
+```bash
+kubectl config use-context kind-vault-lab-eso
+./scripts/eso/install-external-secrets.sh
+```
+
+The operator will connect to Vault A using the host port at `https://host.docker.internal:32080` and the shared CA certificate in `secrets/vault-lab-ca.crt`.
+
 ## Remove everything
 
 ```bash
 ./scripts/uninstall.sh
 ./scripts/delete-kind-cluster.sh
+./scripts/eso/delete-kind-cluster-eso.sh
 ```
 
 ## Notes

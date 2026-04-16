@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: external-secrets
+
+# Namespace for the External Secrets Operator installation.
+# The operator and its CRDs are deployed into this namespace.

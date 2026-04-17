@@ -1,0 +1,22 @@
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: vault-a-kubernetes-store
+  namespace: external-secrets
+spec:
+  provider:
+    vault:
+      server: https://host.docker.internal:32080
+      path: secret
+      version: v2
+      caProvider:
+        type: Secret
+        name: vault-a-ca
+        key: ca.crt
+      auth:
+        kubernetes:
+          mountPath: kubernetes
+          role: external-secrets
+          serviceAccountRef:
+            name: external-secrets
+            namespace: external-secrets

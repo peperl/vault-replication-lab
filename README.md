@@ -111,21 +111,24 @@ This workspace now supports a separate operator cluster for External Secrets, wh
 ./scripts/eso/create-kind-cluster-eso.sh
 ```
 
-2. Bootstrap Vault A auth methods for Kubernetes and JWT:
-
-```bash
-kubectl config use-context kind-vault-lab
-./scripts/eso/bootstrap-vault-auth.sh
-```
-
-3. Install the External Secrets operator into the new cluster:
+2. Install the External Secrets operator into the new cluster:
 
 ```bash
 kubectl config use-context kind-vault-lab-eso
 ./scripts/eso/install-external-secrets.sh
 ```
 
-The operator will connect to Vault A using the host port at `https://host.docker.internal:32080` and the shared CA certificate in `secrets/vault-lab-ca.crt`.
+3. Configure Vault A for ESO cross-cluster authentication and create a test secret:
+
+```bash
+kubectl config use-context kind-vault-lab
+./scripts/eso/setup-eso-auth.sh \
+  --vault-url https://host.docker.internal:32080 \
+  --vault-token "$(jq -r '.root_token' secrets/vault-a-init.json)" \
+  --vault-ca-file secrets/vault-lab-ca.crt
+```
+
+The script will enable both Vault auth methods, write a test secret, and generate SecretStore/ExternalSecret manifests for the ESO cluster.
 
 ## Remove everything
 

@@ -25,7 +25,7 @@ def parse_args():
     parser.add_argument("--jwt-jwks-url", required=False, help="JWKS URL reachable from Vault")
     parser.add_argument("--jwt-jwks-file", required=False, help="Path to a local JWKS JSON file")
     parser.add_argument("--jwt-client-id", default="external-secrets", help="JWT client ID (not used for JWKS-based validation)")
-    parser.add_argument("--jwt-audience", default="vault", help="Expected JWT audience")
+    parser.add_argument("--jwt-audience", default="vault,https://kubernetes.default.svc.cluster.local", help="Expected JWT audience(s), comma-separated if multiple")
     parser.add_argument("--kube-role-name", default="external-secrets", help="Vault Kubernetes auth role name")
     parser.add_argument("--jwt-role-name", default="external-secrets-jwt", help="Vault JWT auth role name")
     parser.add_argument("--policy-name", default="external-secrets-policy", help="Vault policy name")
@@ -214,6 +214,10 @@ def configure_jwt(vault_url, token, ca_file, mount, discovery_url, jwks_url, jwk
 
 def write_jwt_role(vault_url, token, ca_file, mount, role_name, audience, policy_name, issuer):
     print(f"Writing JWT auth role '{role_name}'.")
+    if isinstance(audience, str):
+        audience = [item.strip() for item in audience.split(",") if item.strip()]
+        if len(audience) == 1:
+            audience = audience[0]
     payload = {
         "role_type": "jwt",
         "bound_audiences": audience,

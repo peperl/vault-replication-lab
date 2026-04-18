@@ -128,7 +128,19 @@ kubectl config use-context kind-vault-lab
   --vault-ca-file secrets/vault-lab-ca.crt
 ```
 
+If the ESO kubeconfig server URL uses localhost or 127.0.0.1, the script will rewrite it to use `host.docker.internal` so Vault can reach the API server from inside the kind cluster. If your ESO API server is exposed on a different host or port, pass `--kube-host` explicitly.
+
 The script will enable both Vault auth methods, write a test secret, and generate SecretStore/ExternalSecret manifests for the ESO cluster.
+
+
+# test
+## JWT
+
+SA_TOKEN=$(kubectl --context kind-vault-lab-eso -n external-secrets create token external-secrets)
+josereyes@MacBook-Air-de-Jose vault-replication-lab % curl -sk \
+  -X POST https://host.docker.internal:32080/v1/auth/jwt/login \
+  -H "Content-Type: application/json" \
+  -d "{\"jwt\":\"$SA_TOKEN\", \"role\":\"external-secrets-jwt\"}"
 
 ## Remove everything
 

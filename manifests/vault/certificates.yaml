@@ -15,6 +15,7 @@ spec:
     size: 2048
   dnsNames:
     - localhost
+    - host.docker.internal
     - vault-a
     - vault-a.vault-a
     - vault-a.vault-a.svc

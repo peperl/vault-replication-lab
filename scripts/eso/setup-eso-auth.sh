@@ -22,11 +22,12 @@ Optional:
   --kube-context CONTEXT     kubeconfig context for ESO cluster (default: kind-vault-lab-eso)
   --kube-namespace NS        ESO namespace containing the service account (default: external-secrets)
   --kube-service-account SA  ESO service account used by the operator (default: external-secrets)
-  --kube-host URL            ESO cluster API URL reachable from Vault (default: https://host.docker.internal:6443)
-  --kube-issuer ISSUER       Issuer claim for ESO service account tokens (default: https://kubernetes.default.svc.cluster.local)
-  --jwt-discovery-url URL    OIDC discovery URL accessible from Vault (default: https://host.docker.internal:6443/.well-known/openid-configuration)
+  --token-reviewer-service-account SA  Kubernetes service account used by Vault for token review (default: external-secrets-token-reviewer)
+  --kube-host URL            ESO cluster API URL reachable from Vault (default: derived from the kubeconfig server URL, with localhost rewritten to host.docker.internal)
+  --kube-issuer ISSUER       Issuer claim for ESO service account tokens (default: discovered from the ESO API server OIDC configuration)
+  --jwt-discovery-url URL    OIDC discovery URL accessible from Vault (default: derived from --kube-host)
   --jwt-client-id ID         JWT client ID (default: external-secrets)
-  --jwt-audience AUD         JWT audience (default: vault)
+  --jwt-audience AUD         JWT audience(s), comma-separated if multiple (default: vault,https://kubernetes.default.svc.cluster.local)
   --test-secret-path PATH    KV v2 path to write the test secret (default: secret/data/eso-test)
   --test-secret-key KEY      Secret data key (default: value)
   --test-secret-value VALUE  Secret data value (default: eso-test-value)
@@ -47,15 +48,17 @@ VAULT_CA_FILE=""
 KUBE_CONTEXT="kind-vault-lab-eso"
 KUBE_NAMESPACE="external-secrets"
 KUBE_SERVICE_ACCOUNT="external-secrets"
-KUBE_HOST="https://host.docker.internal:6443"
-KUBE_ISSUER="https://kubernetes.default.svc.cluster.local"
-JWT_DISCOVERY_URL="https://host.docker.internal:6443/.well-known/openid-configuration"
+KUBE_HOST=""
+KUBE_ISSUER=""
+TOKEN_REVIEWER_SERVICE_ACCOUNT=""
+JWT_DISCOVERY_URL=""
 JWT_CLIENT_ID="external-secrets"
-JWT_AUDIENCE="vault"
+JWT_AUDIENCE="vault,https://kubernetes.default.svc.cluster.local"
 TEST_SECRET_PATH="secret/data/eso-test"
 TEST_SECRET_KEY="value"
 TEST_SECRET_VALUE="eso-test-value"
 APPLY_MANIFESTS=1
+KUBE_ISSUER_SET=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -87,12 +90,17 @@ while [[ $# -gt 0 ]]; do
       KUBE_SERVICE_ACCOUNT="$2"
       shift 2
       ;;
+    --token-reviewer-service-account)
+      TOKEN_REVIEWER_SERVICE_ACCOUNT="$2"
+      shift 2
+      ;;
     --kube-host)
       KUBE_HOST="$2"
       shift 2
       ;;
     --kube-issuer)
       KUBE_ISSUER="$2"
+      KUBE_ISSUER_SET=1
       shift 2
       ;;
     --jwt-discovery-url)
@@ -165,18 +173,42 @@ KUBECTL_BASE=(kubectl --context "${KUBE_CONTEXT}")
 
 # Get the token reviewer JWT from the target service account.
 get_service_account_token() {
-  if "${KUBECTL_BASE[@]}" create token "${KUBE_SERVICE_ACCOUNT}" -n "${KUBE_NAMESPACE}" >/dev/null 2>&1; then
-    "${KUBECTL_BASE[@]}" create token "${KUBE_SERVICE_ACCOUNT}" -n "${KUBE_NAMESPACE}"
+  local sa_name="${1:-${KUBE_SERVICE_ACCOUNT}}"
+  if "${KUBECTL_BASE[@]}" create token "${sa_name}" -n "${KUBE_NAMESPACE}" >/dev/null 2>&1; then
+    "${KUBECTL_BASE[@]}" create token "${sa_name}" -n "${KUBE_NAMESPACE}"
     return 0
   fi
 
   local secret_name
-  secret_name="$(${KUBECTL_BASE[@]} -n "${KUBE_NAMESPACE}" get sa "${KUBE_SERVICE_ACCOUNT}" -o jsonpath='{.secrets[0].name}')"
+  secret_name="$(${KUBECTL_BASE[@]} -n "${KUBE_NAMESPACE}" get sa "${sa_name}" -o jsonpath='{.secrets[0].name}' 2>/dev/null || true)"
   if [[ -z "${secret_name}" ]]; then
-    echo "Failed to find service account secret for ${KUBE_SERVICE_ACCOUNT}." >&2
+    echo "Failed to find service account secret for ${sa_name}." >&2
     return 1
   fi
   "${KUBECTL_BASE[@]} -n "${KUBE_NAMESPACE}" get secret "${secret_name}" -o jsonpath='{.data.token}' | base64 --decode"
+}
+
+ensure_token_reviewer_service_account() {
+  cat <<EOF | kubectl --context "${KUBE_CONTEXT}" apply -f - >/dev/null
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${TOKEN_REVIEWER_SERVICE_ACCOUNT}
+  namespace: ${KUBE_NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ${TOKEN_REVIEWER_SERVICE_ACCOUNT}-auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: ${TOKEN_REVIEWER_SERVICE_ACCOUNT}
+  namespace: ${KUBE_NAMESPACE}
+roleRef:
+  kind: ClusterRole
+  name: system:auth-delegator
+  apiGroup: rbac.authorization.k8s.io
+EOF
 }
 
 get_kube_ca_cert() {
@@ -198,6 +230,38 @@ get_kube_ca_cert() {
   return 1
 }
 
+get_kube_api_server() {
+  local server
+  server="$(kubectl config view --raw --flatten --context "${KUBE_CONTEXT}" -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
+  if [[ -z "${server}" ]]; then
+    echo "Unable to determine Kubernetes API server URL for context ${KUBE_CONTEXT}." >&2
+    return 1
+  fi
+  printf "%s" "${server}"
+}
+
+convert_kube_api_server_to_host() {
+  local server="$1"
+  if [[ "${server}" =~ ^https://(127\.0\.0\.1|localhost)(:[0-9]+)(/.*)?$ ]]; then
+    printf "https://host.docker.internal%s" "${BASH_REMATCH[2]}"
+  else
+    printf "%s" "${server}"
+  fi
+}
+
+if [[ -z "${KUBE_HOST}" ]]; then
+  kube_api_server="$(get_kube_api_server)"
+  KUBE_HOST="$(convert_kube_api_server_to_host "${kube_api_server}")"
+fi
+
+if [[ -z "${TOKEN_REVIEWER_SERVICE_ACCOUNT}" ]]; then
+  TOKEN_REVIEWER_SERVICE_ACCOUNT="${KUBE_SERVICE_ACCOUNT}-token-reviewer"
+fi
+
+if [[ -z "${JWT_DISCOVERY_URL}" ]]; then
+  JWT_DISCOVERY_URL="${KUBE_HOST}/.well-known/openid-configuration"
+fi
+
 if ! "${KUBECTL_BASE[@]}" get namespace "${KUBE_NAMESPACE}" >/dev/null 2>&1; then
   echo "Namespace ${KUBE_NAMESPACE} does not exist in context ${KUBE_CONTEXT}." >&2
   exit 1
@@ -212,13 +276,17 @@ KUBE_CA_FILE="${TEMP_DIR}/kube-ca.crt"
 JWT_JWKS_FILE="${TEMP_DIR}/jwks.json"
 OIDC_CONFIG_FILE="${TEMP_DIR}/oidc.json"
 
-get_service_account_token > "${TOKEN_REVIEWER_JWT_FILE}"
+ensure_token_reviewer_service_account
+get_service_account_token "${TOKEN_REVIEWER_SERVICE_ACCOUNT}" > "${TOKEN_REVIEWER_JWT_FILE}"
 get_kube_ca_cert > "${KUBE_CA_FILE}"
 
 # Extract the ESO cluster OIDC issuer and JWKS from the API server.
 "${KUBECTL_BASE[@]}" get --raw '/.well-known/openid-configuration' > "${OIDC_CONFIG_FILE}"
 "${KUBECTL_BASE[@]}" get --raw '/openid/v1/jwks' > "${JWT_JWKS_FILE}"
 OIDC_ISSUER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["issuer"])' "${OIDC_CONFIG_FILE}")"
+if [[ ${KUBE_ISSUER_SET} -eq 0 ]]; then
+  KUBE_ISSUER="${OIDC_ISSUER}"
+fi
 
 python3 "${PYTHON_SCRIPT}" \
   --vault-url "${VAULT_URL}" \
@@ -227,7 +295,7 @@ python3 "${PYTHON_SCRIPT}" \
   --token-reviewer-jwt-file "${TOKEN_REVIEWER_JWT_FILE}" \
   --kube-ca-file "${KUBE_CA_FILE}" \
   --kube-host "${KUBE_HOST}" \
-  --kube-issuer "${OIDC_ISSUER}" \
+  --kube-issuer "${KUBE_ISSUER}" \
   --jwt-jwks-file "${JWT_JWKS_FILE}" \
   --jwt-client-id "${JWT_CLIENT_ID}" \
   --jwt-audience "${JWT_AUDIENCE}" \
@@ -287,7 +355,14 @@ spec:
               name: ${KUBE_SERVICE_ACCOUNT}
               namespace: ${KUBE_NAMESPACE}
             audiences:
-              - ${JWT_AUDIENCE}
+EOF
+  IFS=',' read -ra JWT_AUDIENCES <<< "${JWT_AUDIENCE}"
+  for aud in "${JWT_AUDIENCES[@]}"; do
+    aud="${aud## }"
+    aud="${aud%% }"
+    printf '              - %s\n' "${aud}" >> "${SCRIPT_DIR}/vault-a-jwt-store.yaml"
+  done
+  cat >> "${SCRIPT_DIR}/vault-a-jwt-store.yaml" <<EOF
 EOF
 
   cat > "${SCRIPT_DIR}/eso-test-externalsecret.yaml" <<EOF

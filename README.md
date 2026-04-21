@@ -128,6 +128,8 @@ kubectl config use-context kind-vault-lab
   --vault-ca-file secrets/vault-lab-ca.crt
 ```
 
+**Note:** In multi-cluster setups, only JWT authentication works reliably. Kubernetes authentication requires the Vault server to make HTTP calls to the ESO cluster's API server for token validation, which fails when clusters are separate. For production multi-cluster deployments, use the `--jwt-only` flag.
+
 If the ESO kubeconfig server URL uses localhost or 127.0.0.1, the script will rewrite it to use `host.docker.internal` so Vault can reach the API server from inside the kind cluster. If your ESO API server is exposed on a different host or port, pass `--kube-host` explicitly.
 
 The script will enable both Vault auth methods, write a test secret, and generate SecretStore/ExternalSecret manifests for the ESO cluster.

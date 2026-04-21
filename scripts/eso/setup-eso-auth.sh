@@ -31,6 +31,7 @@ Optional:
   --test-secret-path PATH    KV v2 path to write the test secret (default: secret/data/eso-test)
   --test-secret-key KEY      Secret data key (default: value)
   --test-secret-value VALUE  Secret data value (default: eso-test-value)
+  --jwt-only                 Only configure JWT auth, skip Kubernetes auth (recommended for multi-cluster setups)
   --no-apply-manifests       Do not apply generated SecretStore/ExternalSecret manifests
   -h, --help                 Show this help message
 EOF
@@ -58,6 +59,7 @@ TEST_SECRET_PATH="secret/data/eso-test"
 TEST_SECRET_KEY="value"
 TEST_SECRET_VALUE="eso-test-value"
 APPLY_MANIFESTS=1
+JWT_ONLY=0
 KUBE_ISSUER_SET=0
 
 while [[ $# -gt 0 ]]; do
@@ -127,6 +129,10 @@ while [[ $# -gt 0 ]]; do
       TEST_SECRET_VALUE="$2"
       shift 2
       ;;
+    --jwt-only)
+      JWT_ONLY=1
+      shift
+      ;;
     --no-apply-manifests)
       APPLY_MANIFESTS=0
       shift
@@ -188,27 +194,37 @@ get_service_account_token() {
   "${KUBECTL_BASE[@]} -n "${KUBE_NAMESPACE}" get secret "${secret_name}" -o jsonpath='{.data.token}' | base64 --decode"
 }
 
+substitute_template_vars() {
+  local template_file="$1"
+  local temp_file="$2"
+
+  sed \
+    -e "s|{{TOKEN_REVIEWER_SERVICE_ACCOUNT}}|${TOKEN_REVIEWER_SERVICE_ACCOUNT}|g" \
+    -e "s|{{KUBE_NAMESPACE}}|${KUBE_NAMESPACE}|g" \
+    "${template_file}" > "${temp_file}"
+}
+
 ensure_token_reviewer_service_account() {
-  cat <<EOF | kubectl --context "${KUBE_CONTEXT}" apply -f - >/dev/null
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ${TOKEN_REVIEWER_SERVICE_ACCOUNT}
-  namespace: ${KUBE_NAMESPACE}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: ${TOKEN_REVIEWER_SERVICE_ACCOUNT}-auth-delegator
-subjects:
-- kind: ServiceAccount
-  name: ${TOKEN_REVIEWER_SERVICE_ACCOUNT}
-  namespace: ${KUBE_NAMESPACE}
-roleRef:
-  kind: ClusterRole
-  name: system:auth-delegator
-  apiGroup: rbac.authorization.k8s.io
-EOF
+  local sa_template="${SCRIPT_DIR}/templates/token-reviewer-service-account.yaml"
+  local crb_template="${SCRIPT_DIR}/templates/token-reviewer-cluster-role-binding.yaml"
+  local sa_temp_file="${TEMP_DIR}/token-reviewer-sa.yaml"
+  local crb_temp_file="${TEMP_DIR}/token-reviewer-crb.yaml"
+
+  if [[ ! -f "${sa_template}" ]]; then
+    echo "Template file not found: ${sa_template}" >&2
+    exit 1
+  fi
+
+  if [[ ! -f "${crb_template}" ]]; then
+    echo "Template file not found: ${crb_template}" >&2
+    exit 1
+  fi
+
+  substitute_template_vars "${sa_template}" "${sa_temp_file}"
+  substitute_template_vars "${crb_template}" "${crb_temp_file}"
+
+  kubectl --context "${KUBE_CONTEXT}" apply -f "${sa_temp_file}" >/dev/null
+  kubectl --context "${KUBE_CONTEXT}" apply -f "${crb_temp_file}" >/dev/null
 }
 
 get_kube_ca_cert() {
@@ -276,9 +292,11 @@ KUBE_CA_FILE="${TEMP_DIR}/kube-ca.crt"
 JWT_JWKS_FILE="${TEMP_DIR}/jwks.json"
 OIDC_CONFIG_FILE="${TEMP_DIR}/oidc.json"
 
-ensure_token_reviewer_service_account
-get_service_account_token "${TOKEN_REVIEWER_SERVICE_ACCOUNT}" > "${TOKEN_REVIEWER_JWT_FILE}"
-get_kube_ca_cert > "${KUBE_CA_FILE}"
+if [[ ${JWT_ONLY} -eq 0 ]]; then
+  ensure_token_reviewer_service_account
+  get_service_account_token "${TOKEN_REVIEWER_SERVICE_ACCOUNT}" > "${TOKEN_REVIEWER_JWT_FILE}"
+  get_kube_ca_cert > "${KUBE_CA_FILE}"
+fi
 
 # Extract the ESO cluster OIDC issuer and JWKS from the API server.
 "${KUBECTL_BASE[@]}" get --raw '/.well-known/openid-configuration' > "${OIDC_CONFIG_FILE}"
@@ -292,10 +310,7 @@ python3 "${PYTHON_SCRIPT}" \
   --vault-url "${VAULT_URL}" \
   --vault-token "${VAULT_TOKEN}" \
   --vault-ca-file "${VAULT_CA_FILE}" \
-  --token-reviewer-jwt-file "${TOKEN_REVIEWER_JWT_FILE}" \
-  --kube-ca-file "${KUBE_CA_FILE}" \
-  --kube-host "${KUBE_HOST}" \
-  --kube-issuer "${KUBE_ISSUER}" \
+  $(if [[ ${JWT_ONLY} -eq 0 ]]; then echo "--token-reviewer-jwt-file ${TOKEN_REVIEWER_JWT_FILE} --kube-ca-file ${KUBE_CA_FILE} --kube-host ${KUBE_HOST} --kube-issuer ${KUBE_ISSUER}"; fi) \
   --jwt-jwks-file "${JWT_JWKS_FILE}" \
   --jwt-client-id "${JWT_CLIENT_ID}" \
   --jwt-audience "${JWT_AUDIENCE}" \
@@ -305,7 +320,9 @@ python3 "${PYTHON_SCRIPT}" \
 
 if [[ "${APPLY_MANIFESTS}" -eq 1 ]]; then
   echo "Applying ESO SecretStore and ExternalSecret manifests for a final test..."
-  cat > "${SCRIPT_DIR}/vault-a-kubernetes-store.yaml" <<EOF
+  
+  if [[ ${JWT_ONLY} -eq 0 ]]; then
+    cat > "${SCRIPT_DIR}/vault-a-kubernetes-store.yaml" <<EOF
 apiVersion: external-secrets.io/v1
 kind: SecretStore
 metadata:
@@ -329,6 +346,7 @@ spec:
             name: ${KUBE_SERVICE_ACCOUNT}
             namespace: ${KUBE_NAMESPACE}
 EOF
+  fi
 
   cat > "${SCRIPT_DIR}/vault-a-jwt-store.yaml" <<EOF
 apiVersion: external-secrets.io/v1
@@ -386,7 +404,9 @@ spec:
         property: ${TEST_SECRET_KEY}
 EOF
 
-  kubectl --context "${KUBE_CONTEXT}" apply -n "${KUBE_NAMESPACE}" -f "${SCRIPT_DIR}/vault-a-kubernetes-store.yaml"
+  if [[ ${JWT_ONLY} -eq 0 ]]; then
+    kubectl --context "${KUBE_CONTEXT}" apply -n "${KUBE_NAMESPACE}" -f "${SCRIPT_DIR}/vault-a-kubernetes-store.yaml"
+  fi
   kubectl --context "${KUBE_CONTEXT}" apply -n "${KUBE_NAMESPACE}" -f "${SCRIPT_DIR}/vault-a-jwt-store.yaml"
   kubectl --context "${KUBE_CONTEXT}" apply -n "${KUBE_NAMESPACE}" -f "${SCRIPT_DIR}/eso-test-externalsecret.yaml"
   echo "Applied test manifests."

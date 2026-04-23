@@ -17,18 +17,13 @@ def parse_args():
     parser.add_argument("--vault-url", required=True, help="Vault HTTPS URL")
     parser.add_argument("--vault-token", required=True, help="Vault root/admin token")
     parser.add_argument("--vault-ca-file", required=True, help="Path to Vault CA certificate")
-    parser.add_argument("--token-reviewer-jwt-file", help="Path to token reviewer JWT file")
-    parser.add_argument("--kube-ca-file", help="Path to Kubernetes cluster CA certificate file")
-    parser.add_argument("--kube-host", help="Kubernetes API server URL reachable from Vault")
-    parser.add_argument("--kube-issuer", help="Expected issuer claim for Kubernetes JWTs")
     parser.add_argument("--jwt-discovery-url", required=False, help="OIDC discovery URL reachable from Vault")
     parser.add_argument("--jwt-jwks-url", required=False, help="JWKS URL reachable from Vault")
     parser.add_argument("--jwt-jwks-file", required=False, help="Path to a local JWKS JSON file")
     parser.add_argument("--jwt-client-id", default="external-secrets", help="JWT client ID (not used for JWKS-based validation)")
     parser.add_argument("--jwt-audience", default="vault,https://kubernetes.default.svc.cluster.local", help="Expected JWT audience(s), comma-separated if multiple")
-    parser.add_argument("--jwt-only", action="store_true", help="Only configure JWT auth, skip Kubernetes auth")
-    parser.add_argument("--kube-role-name", default="external-secrets", help="Vault Kubernetes auth role name")
     parser.add_argument("--jwt-role-name", default="external-secrets-jwt", help="Vault JWT auth role name")
+    parser.add_argument("--kube-issuer", required=False, help="Expected JWT issuer (OIDC issuer)")
     parser.add_argument("--policy-name", default="external-secrets-policy", help="Vault policy name")
     parser.add_argument("--test-secret-path", default="secret/data/eso-test", help="Vault KV v2 path for the test secret")
     parser.add_argument("--test-secret-key", default="value", help="Test secret key")
@@ -86,17 +81,6 @@ def enable_auth(vault_url, token, ca_file, mount, auth_type):
     vault_request("POST", build_url(vault_url, f"v1/sys/auth/{mount}"), token, payload={"type": auth_type}, ca_file=ca_file)
 
 
-def configure_kubernetes(vault_url, token, ca_file, mount, token_reviewer_jwt, kube_host, kube_ca_cert, issuer):
-    print("Configuring Kubernetes auth backend.")
-    payload = {
-        "token_reviewer_jwt": token_reviewer_jwt,
-        "kubernetes_host": kube_host,
-        "kubernetes_ca_cert": kube_ca_cert,
-        "issuer": issuer,
-    }
-    vault_request("POST", build_url(vault_url, f"v1/auth/{mount}/config"), token, payload=payload, ca_file=ca_file)
-
-
 def write_policy(vault_url, token, ca_file, policy_name):
     print(f"Writing Vault policy '{policy_name}'.")
     policy = '''path "secret/data/*" {
@@ -107,17 +91,6 @@ path "secret/metadata/*" {
 }
 '''
     vault_request("PUT", build_url(vault_url, f"v1/sys/policies/acl/{policy_name}"), token, payload={"policy": policy}, ca_file=ca_file)
-
-
-def write_kubernetes_role(vault_url, token, ca_file, mount, role_name, policy_name):
-    print(f"Writing Kubernetes auth role '{role_name}'.")
-    payload = {
-        "bound_service_account_names": "external-secrets",
-        "bound_service_account_namespaces": "external-secrets",
-        "policies": policy_name,
-        "token_ttl": "1h",
-    }
-    vault_request("POST", build_url(vault_url, f"v1/auth/{mount}/role/{role_name}"), token, payload=payload, ca_file=ca_file)
 
 
 def ensure_kv_engine(vault_url, token, ca_file, mount="secret", version=2):
@@ -192,13 +165,15 @@ def jwks_to_pem(keys):
     raise RuntimeError("No RSA key found in JWKS.")
 
 
-def configure_jwt(vault_url, token, ca_file, mount, discovery_url, jwks_url, jwks_file, client_id, kube_ca_file):
+def configure_jwt(vault_url, token, ca_file, mount, discovery_url, jwks_url, jwks_file, client_id, kube_ca_file=None):
     print("Configuring JWT auth backend.")
     if not jwks_file and not jwks_url and not discovery_url:
         raise RuntimeError("Either --jwt-jwks-file, --jwt-jwks-url, or --jwt-discovery-url must be provided.")
     if jwks_file:
         keys = load_jwks_file(jwks_file)
     else:
+        if not kube_ca_file:
+            raise RuntimeError("kube_ca_file is required when fetching JWKS from URL")
         if not jwks_url:
             discovery = vault_request("GET", discovery_url, token="", ca_file=kube_ca_file)
             jwks_url = discovery.get("jwks_uri")
@@ -242,33 +217,7 @@ def write_test_secret(vault_url, token, ca_file, secret_path, secret_key, secret
 def main():
     args = parse_args()
     
-    if not args.jwt_only:
-        token_reviewer_jwt = load_file(args.token_reviewer_jwt_file).strip()
-        kube_ca_cert = load_file(args.kube_ca_file)
-
-        enable_auth(args.vault_url, args.vault_token, args.vault_ca_file, "kubernetes", "kubernetes")
-        configure_kubernetes(
-            args.vault_url,
-            args.vault_token,
-            args.vault_ca_file,
-            "kubernetes",
-            token_reviewer_jwt,
-            args.kube_host,
-            kube_ca_cert,
-            args.kube_issuer,
-        )
-        write_policy(args.vault_url, args.vault_token, args.vault_ca_file, args.policy_name)
-        write_kubernetes_role(
-            args.vault_url,
-            args.vault_token,
-            args.vault_ca_file,
-            "kubernetes",
-            args.kube_role_name,
-            args.policy_name,
-        )
-    else:
-        # For JWT-only mode, we still need the policy for JWT roles
-        write_policy(args.vault_url, args.vault_token, args.vault_ca_file, args.policy_name)
+    write_policy(args.vault_url, args.vault_token, args.vault_ca_file, args.policy_name)
     
     enable_auth(args.vault_url, args.vault_token, args.vault_ca_file, "jwt", "jwt")
     configure_jwt(
@@ -280,7 +229,7 @@ def main():
         args.jwt_jwks_url,
         args.jwt_jwks_file,
         args.jwt_client_id,
-        args.kube_ca_file,
+        None,
     )
     write_jwt_role(
         args.vault_url,
@@ -301,9 +250,7 @@ def main():
         args.test_secret_key,
         args.test_secret_value,
     )
-    print("Vault auth configuration complete.")
-    if not args.jwt_only:
-        print(f"Kubernetes role: {args.kube_role_name}")
+    print("Vault JWT auth configuration complete.")
     print(f"JWT role: {args.jwt_role_name}")
     print(f"Test secret path: {args.test_secret_path}")
 

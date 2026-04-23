@@ -6,7 +6,7 @@ metadata:
 spec:
   provider:
     vault:
-      server: https://host.docker.internal:32080
+      server: https://127.0.0.1:32080
       path: secret
       version: v2
       caProvider:
